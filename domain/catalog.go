@@ -83,32 +83,32 @@ type (
 	}
 
 	Product struct {
-		Model       `storm:"inline"`
-		Title       string   `json:"title" fako:"product_name"`
-		Description string   `json:"description" gorm:"size:1024" fako:"paragraph"`
-		Price       *float64 `json:"price"`
-		IsActive    *bool    `json:"isActive"`
+		Model       `db:",inline"`
+		Title       string   `json:"title" db:"title" fako:"product_name"`
+		Description string   `json:"description" db:"description" gorm:"size:1024" fako:"paragraph"`
+		Price       *float64 `json:"price" db:"price"`
+		IsActive    *bool    `json:"isActive" db:"is_active"`
+		ImageID     uint     `json:"-" db:"image_id"`
 
-		Categories []*Category `gorm:"many2many:pivot_product_category" json:"categories,omitempty"`
-		Image      *Image      `json:"defaultImage,omitempty"`
-		ImageID    uint        `json:"-"`
+		Categories []*Category `json:"categories,omitempty" db:"-" gorm:"many2many:pivot_product_category"`
+		Image      *Image      `json:"defaultImage,omitempty" db:"-"`
 	}
 
 	Category struct {
-		Model
-		Title       string `json:"title" fako:"title"`
-		Description string `json:"description" gorm:"size:1024" fako:"paragraph"`
-		IsActive    bool   `json:"isActive"`
+		Model       `db:",inline"`
+		Title       string `json:"title" db:"title"`
+		Description string `json:"description" db:"description" gorm:"size:1024"`
+		IsActive    bool   `json:"isActive" db:"is_active"`
+		ImageID     uint   `json:"-" db:"image_id"`
 
-		Image    *Image    `json:"image,omitempty"`
-		ImageID  uint      `json:"-"`
-		Products []Product `gorm:"many2many:pivot_product_category" json:"products,omitempty"`
+		Image    *Image    `json:"image,omitempty" db:"-"`
+		Products []Product `json:"products,omitempty" db:"-" gorm:"many2many:pivot_product_category"`
 	}
 
 	Image struct {
-		Model
-		PublicID     string `json:"publicId" gorm:"unique_index"`
-		ResourceType string `json:"resourceType"`
+		Model        `db:",inline"`
+		PublicID     string `json:"publicId" db:"public_id" gorm:"unique_index"`
+		ResourceType string `json:"resourceType" db:"resource_type"`
 	}
 )
 

@@ -18,6 +18,27 @@ func newUser(f engine.Factory) *user {
 	return &user{f.NewUser()}
 }
 
+func (u *user) activate(w http.ResponseWriter, r *http.Request) error {
+	req := new(engine.UserActivateRequest)
+	if err := decodeReq(r, req); err != nil {
+		return err
+	}
+
+	if err := u.Activate(req); err != nil {
+		tokenErr, ok := err.(*engine.TokenErr)
+		if ok {
+			if tokenErr.Expired() {
+				return newWebErr(expiredTokenErrCode, http.StatusBadRequest, err)
+			}
+			return newWebErr(invalidTokenErrCode, http.StatusBadRequest, err)
+		}
+		return err
+	}
+
+	gores.NoContent(w)
+	return nil
+}
+
 func (u *user) login(w http.ResponseWriter, r *http.Request) error {
 	req := new(engine.LoginRequest)
 	if err := decodeReq(r, req); err != nil {
@@ -28,14 +49,14 @@ func (u *user) login(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		switch err {
 		case engine.ErrWrongCredentials:
-			return newWebErr(wrongCredErrCode, http.StatusUnprocessableEntity, err)
+			return newWebErr(wrongCredErrCode, http.StatusUnauthorized, err)
 		case engine.ErrInActiveUser:
-			return newWebErr(inactiveUserErrCode, http.StatusUnprocessableEntity, err)
+			return newWebErr(inactiveUserErrCode, http.StatusUnauthorized, err)
 		}
 		return err
 	}
 
-	jwt, err := u.GenJWT(usr)
+	jwt, err := u.GenToken(usr, engine.AuthToken)
 	if err != nil {
 		return err
 	}
@@ -57,12 +78,11 @@ func (u *user) register(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 
-	jwt, err := u.GenJWT(usr)
+	jwt, err := u.GenToken(usr, engine.AuthToken)
 	if err != nil {
 		return err
 	}
-
-	return gores.JSON(w, http.StatusOK, response{jwt})
+	return gores.JSON(w, http.StatusCreated, response{jwt})
 }
 
 func (u *user) forgotPassword(w http.ResponseWriter, r *http.Request) error {
@@ -73,11 +93,12 @@ func (u *user) forgotPassword(w http.ResponseWriter, r *http.Request) error {
 
 	if err := u.SendPasswordResetMail(req); err != nil {
 		if err == engine.ErrNoRows {
-			return newWebErr(noRowsErrCode, http.StatusUnprocessableEntity, err)
+			return newWebErr(noRowsErrCode, http.StatusNotFound, err)
 		}
 		return err
 	}
 
+	gores.NoContent(w)
 	return nil
 }
 
@@ -95,6 +116,7 @@ func (u *user) resetPassword(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 
+	gores.NoContent(w)
 	return nil
 }
 

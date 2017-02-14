@@ -23,6 +23,7 @@ type (
 		InCategories []uint
 		// IncludeInactive include inactive products
 		IncludeInactive bool
+		Sort            Sorting
 		Limit           int
 		Offset          int
 	}
@@ -62,9 +63,7 @@ func (c *catalog) AddProduct(r *AddProductRequest) (*domain.Product, error) {
 		p.Image = img
 	}
 
-	q := NewQuery("").Filter("id", In, r.Categories)
-
-	cats, err := c.repo.FindCategories(q)
+	cats, err := c.repo.FindCategoriesByIDs(r.Categories)
 	if err != nil {
 		return nil, err
 	}
@@ -77,44 +76,25 @@ func (c *catalog) AddProduct(r *AddProductRequest) (*domain.Product, error) {
 }
 
 func (c *catalog) ShowProduct(r *ShowProductRequest) (*domain.Product, error) {
-	f := idFilter(r.ID)
 	if r.IncludeInactive == false {
-		f = append(f, NewFilter("is_active", Equal, true))
+		return c.repo.OneProduct(r.ID)
 	}
-
-	return c.repo.OneProductBy(f)
+	return c.repo.OneActiveProduct(r.ID)
 }
 
 func (c *catalog) ListProducts(r *ListProductsRequest) ([]*domain.Product, error) {
-	q := NewQuery("")
-	if r != nil {
-		if r.IncludeInactive == false {
-			q.Filter("is_active", Equal, true)
-		}
-
-		if r.Limit > 0 {
-			q.Slice(r.Offset, r.Limit)
-		} else {
-			q.Slice(0, 100)
-		}
-
-		if r.InCategories != nil {
-			return c.repo.FindProductsInCategories(r.InCategories, q)
-		}
+	if r.IncludeInactive {
+		return c.repo.FindProductsInCategories(r.InCategories, r.Sort, r.Offset, r.Limit)
 	}
-
-	return c.repo.FindProducts(q)
+	return c.repo.FindActiveProductsInCategories(r.InCategories, r.Sort, r.Offset, r.Limit)
 }
 
 func (c *catalog) UpdateProduct(r *UpdateProductRequest) error {
 	// get original product from db
-	f := idFilter(r.ID)
-	op, err := c.repo.OneProductBy(f)
+	p, err := c.repo.OneProduct(r.ID)
 	if err != nil {
 		return err
 	}
-
-	var p domain.Product
 
 	if r.Title != "" {
 		if err := checkProductTitle(c.validator, r.Title); err != nil {
@@ -141,14 +121,12 @@ func (c *catalog) UpdateProduct(r *UpdateProductRequest) error {
 			return err
 		}
 
-		if op.ImageID == 0 || op.ImageID != img.ID {
+		if p.ImageID == 0 || p.ImageID != img.ID {
 			p.Image = img
 		}
 	}
 
-	q := NewQuery("").Filter("id", In, r.Categories)
-
-	cs, err := c.repo.FindCategories(q)
+	cs, err := c.repo.FindCategoriesByIDs(r.Categories)
 	if err != nil {
 		return err
 	}
@@ -157,12 +135,11 @@ func (c *catalog) UpdateProduct(r *UpdateProductRequest) error {
 		p.AddCategory(c)
 	}
 
-	return c.repo.UpdateProduct(&p)
+	return c.repo.UpdateProduct(p)
 }
 
 func (c *catalog) DeleteProduct(r *DeleteProductRequest) error {
-	f := idFilter(r.ID)
-	return c.repo.DeleteProductBy(f)
+	return c.repo.DeleteProductWithAssoc(r.ID)
 }
 
 func checkProductTitle(v Validator, title string) error {

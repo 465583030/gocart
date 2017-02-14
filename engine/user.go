@@ -4,21 +4,25 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"strconv"
 	"time"
 
 	"sync"
 
 	"github.com/alioygur/gocart/domain"
+	"github.com/pkg/errors"
 )
 
 type (
+	// TokenType ...
+	TokenType uint8
+
+	// User service interface
 	User interface {
-		GetFromJWT(tokenStr string) (*domain.User, error)
-		GenJWT(*domain.User) (string, error)
-		GenPasswordResetToken(*domain.User) (string, error)
+		GetFromAuthToken(tokenStr string) (*domain.User, error)
+		GenToken(*domain.User, TokenType) (string, error)
 		Login(*LoginRequest) (*domain.User, error)
 		Register(*RegisterRequest) (*domain.User, error)
+		Activate(*UserActivateRequest) error
 		SendPasswordResetMail(*ForgotPasswordRequest) error
 		ResetPassword(*ResetPasswordRequest) error
 		Show(*ShowUserRequest) (*domain.User, error)
@@ -30,36 +34,48 @@ type (
 		repo      UserRepository
 		mailer    Mailer
 		validator Validator
+		emitter   Emitter
 	}
 
+	// LoginRequest context for user.Login()
 	LoginRequest struct {
 		Email    string
 		Password string
 	}
 
+	// RegisterRequest context for user.Register()
 	RegisterRequest struct {
-		Email     string
-		Password  string
-		FirstName string `json:"firstName"`
-		LastName  string `json:"lastName"`
-		IsActive  *bool  `json:"-"`
+		Email         string
+		Password      string
+		FirstName     string `json:"firstName"`
+		LastName      string `json:"lastName"`
+		IsActive      *bool  `json:"-"`
+		ActivationURL string `json:"-"`
 	}
 
+	// UserActivateRequest context for user.Activate()
+	UserActivateRequest struct {
+		Token string `json:"token"`
+	}
+
+	//ForgotPasswordRequest context for user.ForgotPassword()
 	ForgotPasswordRequest struct {
 		Email   string
 		BaseURL string
 	}
 
+	// ResetPasswordRequest context for user.ResetPassword()
 	ResetPasswordRequest struct {
-		Email    string
 		Token    string
 		Password string
 	}
 
+	// ShowUserRequest context for user.Show()
 	ShowUserRequest struct {
 		ID uint
 	}
 
+	// UpdateUserRequest context for user.Update()
 	UpdateUserRequest struct {
 		ID uint `json:"-"`
 		RegisterRequest
@@ -71,6 +87,13 @@ var (
 	userOnce     sync.Once
 )
 
+// Token Types
+const (
+	AuthToken TokenType = iota
+	ActivationToken
+	PasswordResetToken
+)
+
 func (f *factory) NewUser() User {
 	userOnce.Do(func() {
 		userInstance = &user{
@@ -78,14 +101,14 @@ func (f *factory) NewUser() User {
 			repo:      f.NewUserRepository(),
 			mailer:    f.NewMail(),
 			validator: f.v,
+			emitter:   f.emitter,
 		}
 	})
 	return userInstance
 }
 
 func (u *user) Login(r *LoginRequest) (*domain.User, error) {
-	f := []*Filter{NewFilter("email", Equal, r.Email)}
-	usr, err := u.repo.OneBy(f)
+	usr, err := u.repo.OneByEmail(r.Email)
 	if err != nil {
 		if err == ErrNoRows {
 			return nil, ErrWrongCredentials
@@ -108,13 +131,12 @@ func (u *user) Register(r *RegisterRequest) (*domain.User, error) {
 	if err := u.validator.CheckEmail(r.Email); err != nil {
 		return nil, err
 	}
-	if err := checkPassowrd(u.validator, r.Password); err != nil {
+	if err := checkPassword(u.validator, r.Password); err != nil {
 		return nil, err
 	}
 
 	// check for email
-	f := []*Filter{NewFilter("email", Equal, r.Email)}
-	exists, err := u.repo.ExistsBy(f)
+	exists, err := u.repo.ExistsByEmail(r.Email)
 	if err != nil {
 		return nil, err
 	} else if exists {
@@ -137,132 +159,129 @@ func (u *user) Register(r *RegisterRequest) (*domain.User, error) {
 		return nil, err
 	}
 
-	if err := u.mailer.SendWelcomeMail(usr.Email); err != nil {
+	// so we need to send activation mail?
+	if *r.IsActive {
+		return &usr, nil // no :)
+	}
+
+	token, err := u.GenToken(&usr, ActivationToken)
+	if err != nil {
+		return nil, err
+	}
+
+	u.emitter.Emit(TokenGenerated, token, ActivationToken)
+
+	if r.ActivationURL == "" {
+		r.ActivationURL = os.Getenv("ACTIVATION_URL")
+	}
+	pURL, err := url.Parse(r.ActivationURL)
+	if err != nil {
+		return nil, err
+	}
+	q := pURL.Query()
+	q.Set("token", token)
+	pURL.RawQuery = q.Encode()
+
+	if err := u.mailer.SendWelcomeMail(usr.Email, pURL.String()); err != nil {
 		return nil, err
 	}
 
 	return &usr, nil
 }
 
-func (u *user) GetFromJWT(tokenStr string) (*domain.User, error) {
-	claims, err := u.jwt.Parse(tokenStr, os.Getenv("SECRET_KEY"))
-	if err != nil {
-		return nil, err
-	}
-	idStr, ok := claims["userID"].(string)
-	if !ok {
-		return nil, fmt.Errorf("userID can't get from token claims, token: %s", tokenStr)
-	}
-
-	id, err := strconv.Atoi(idStr)
-	if err != nil {
-		return nil, err
-	}
-
-	return u.repo.OneBy(idFilter(uint(id)))
-}
-
-func (u *user) GenJWT(du *domain.User) (string, error) {
-	id := strconv.Itoa(int(du.ID))
-	claims := map[string]interface{}{
-		"userID": id,
-		"exp":    time.Now().Add(time.Hour * 6).Unix(),
-	}
-
-	return u.jwt.Sign(claims, os.Getenv("SECRET_KEY"))
-}
-
-func (u *user) GenPasswordResetToken(du *domain.User) (string, error) {
-	claims := map[string]interface{}{"email": du.Email, "exp": time.Now().Add(time.Hour * 5).Unix()}
-	return u.jwt.Sign(claims, du.Password)
-}
-
-func (u *user) CheckPasswordResetToken(tokenStr string, du *domain.User) error {
-	claims, err := u.jwt.Parse(tokenStr, du.Password)
+func (u *user) Activate(r *UserActivateRequest) error {
+	email, err := u.getEmailFromToken(r.Token, ActivationToken)
 	if err != nil {
 		return err
 	}
 
-	email, ok := claims["email"].(string)
-	if !ok {
-		return fmt.Errorf("email can't get from token claims, token: %s", tokenStr)
+	usr, err := u.repo.OneByEmail(email)
+	if err != nil {
+		return err
 	}
 
-	if email != du.Email {
-		return fmt.Errorf("token's email and user's email aren't equal: %s", tokenStr)
+	// check if already active?
+	if *usr.IsActive {
+		return nil
 	}
 
-	return nil
+	// activate user
+	usr.IsActive = boolPtr(true)
+
+	return u.repo.Update(usr)
+}
+
+func (u *user) GetFromAuthToken(tokenStr string) (*domain.User, error) {
+	email, err := u.getEmailFromToken(tokenStr, AuthToken)
+	if err != nil {
+		return nil, err
+	}
+
+	return u.repo.OneByEmail(email)
 }
 
 func (u *user) SendPasswordResetMail(r *ForgotPasswordRequest) error {
 	if r.BaseURL == "" {
 		r.BaseURL = os.Getenv("PASSWORD_RESET_URL")
 	}
-	resetURL, err := url.Parse(r.BaseURL)
+
+	usr, err := u.repo.OneByEmail(r.Email)
 	if err != nil {
 		return err
 	}
 
-	f := []*Filter{NewFilter("email", Equal, r.Email)}
-	usr, err := u.repo.OneBy(f)
+	token, err := u.GenToken(usr, PasswordResetToken)
 	if err != nil {
 		return err
 	}
 
-	tokenString, err := u.GenPasswordResetToken(usr)
+	pURL, err := url.Parse(r.BaseURL)
 	if err != nil {
 		return err
 	}
+	q := pURL.Query()
+	q.Set("token", token)
+	pURL.RawQuery = q.Encode()
 
-	q := resetURL.Query()
-	q.Set("token", tokenString)
-	resetURL.RawQuery = q.Encode()
-
-	return u.mailer.SendPasswordResetLink(r.Email, resetURL.String())
+	return u.mailer.SendPasswordResetLink(r.Email, pURL.String())
 }
 
 func (u *user) ResetPassword(r *ResetPasswordRequest) error {
 	// validation
-	if err := checkPassowrd(u.validator, r.Password); err != nil {
+	if err := checkPassword(u.validator, r.Password); err != nil {
 		return err
 	}
 
-	f := []*Filter{NewFilter("email", Equal, r.Email)}
-	usr, err := u.repo.OneBy(f)
+	email, err := u.getEmailFromToken(r.Token, PasswordResetToken)
 	if err != nil {
 		return err
 	}
 
-	if err := u.CheckPasswordResetToken(r.Token, usr); err != nil {
+	usr, err := u.repo.OneByEmail(email)
+	if err != nil {
 		return err
 	}
 
-	var uusr domain.User
-	uusr.ID = usr.ID
-	uusr.SetPassword(r.Password)
+	usr.SetPassword(r.Password)
 
-	return u.repo.Update(&uusr)
+	return u.repo.Update(usr)
 }
 
 func (u *user) Show(r *ShowUserRequest) (*domain.User, error) {
-	f := idFilter(r.ID)
-	return u.repo.OneBy(f)
+	return u.repo.One(r.ID)
 }
 
 func (u *user) Update(r *UpdateUserRequest) error {
-	usr, err := u.repo.OneBy(idFilter(r.ID))
+	usr, err := u.repo.One(r.ID)
 	if err != nil {
 		return err
 	}
 
-	var user domain.User
-	user.ID = r.ID
 	if r.FirstName != "" {
-		user.FirstName = r.FirstName
+		usr.FirstName = r.FirstName
 	}
 	if r.LastName != "" {
-		user.LastName = r.LastName
+		usr.LastName = r.LastName
 	}
 	if r.Email != "" && r.Email != usr.Email {
 		// validate
@@ -270,27 +289,61 @@ func (u *user) Update(r *UpdateUserRequest) error {
 			return err
 		}
 		// someone else exists with this email?
-		var f []*Filter
-		f = append(f, NewFilter("email", Equal, r.Email))
-		exists, err := u.repo.ExistsBy(f)
+		exists, err := u.repo.ExistsByEmail(r.Email)
 		if err != nil {
 			return err
 		}
 		if exists {
 			return ErrEmailExists
 		}
-		user.Email = r.Email
+		usr.Email = r.Email
 	}
 	if r.Password != "" {
-		if err := checkPassowrd(u.validator, r.Password); err != nil {
+		if err := checkPassword(u.validator, r.Password); err != nil {
 			return err
 		}
-		user.SetPassword(r.Password)
+		usr.SetPassword(r.Password)
 	}
 
-	return u.repo.Update(&user)
+	return u.repo.Update(usr)
 }
 
-func checkPassowrd(v Validator, p string) error {
-	return v.CheckStringLen(p, 4, 8, "Password")
+func (u *user) GenToken(usr *domain.User, t TokenType) (string, error) {
+	claims := map[string]interface{}{
+		"type":  t,
+		"email": usr.Email,
+	}
+	switch t {
+	case AuthToken:
+		claims["exp"] = time.Now().Add(time.Hour * 6).Unix()
+	case ActivationToken:
+		claims["exp"] = time.Now().Add(time.Hour * 24).Unix()
+	case PasswordResetToken:
+		claims["exp"] = time.Now().Add(time.Hour * 3).Unix()
+	default:
+		return "", errors.Errorf("undefined token type %v", t)
+	}
+	return u.jwt.Sign(claims, os.Getenv("SECRET_KEY"))
+}
+
+func (u *user) getEmailFromToken(token string, t TokenType) (string, error) {
+	claims, err := u.jwt.Parse(token, os.Getenv("SECRET_KEY"))
+	if err != nil {
+		return "", err
+	}
+
+	if ct, ok := claims["type"].(float64); ok != true || TokenType(ct) != t {
+		return "", &TokenErr{fmt.Sprintf("invalid token type %v", t), false}
+	}
+
+	email, ok := claims["email"].(string)
+	if !ok {
+		return "", fmt.Errorf("email can't get from token claims: %v", claims)
+	}
+
+	return email, nil
+}
+
+func checkPassword(v Validator, p string) error {
+	return v.CheckStringLen(p, 4, 16, "Password")
 }

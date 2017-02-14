@@ -30,7 +30,7 @@ func (c *catalog) addProduct(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	return gores.JSON(w, http.StatusOK, p)
+	return gores.JSON(w, http.StatusCreated, response{p})
 }
 
 func (c *catalog) showProduct(w http.ResponseWriter, r *http.Request) error {
@@ -39,12 +39,14 @@ func (c *catalog) showProduct(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	return gores.JSON(w, http.StatusOK, p)
+	return gores.JSON(w, http.StatusOK, response{p})
 }
 
 func (c *catalog) listProducts(w http.ResponseWriter, r *http.Request) error {
 	req := new(engine.ListProductsRequest)
 	req.InCategories = categoryQueryValue(r)
+
+	req.Sort = engine.SortByIDDesc
 
 	limit, err := queryValueInt("limit", r)
 	if err != nil {
@@ -62,7 +64,7 @@ func (c *catalog) listProducts(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	return gores.JSON(w, http.StatusOK, ps)
+	return gores.JSON(w, http.StatusOK, response{ps})
 }
 
 func (c *catalog) updateProduct(w http.ResponseWriter, r *http.Request) error {
@@ -74,6 +76,22 @@ func (c *catalog) updateProduct(w http.ResponseWriter, r *http.Request) error {
 	id := urlParamMustInt("id", r)
 	req.ID = uint(id)
 	if err := c.UpdateProduct(req); err != nil {
+		return err
+	}
+
+	gores.NoContent(w)
+	return nil
+}
+
+func (c *catalog) deleteProduct(w http.ResponseWriter, r *http.Request) error {
+	req := new(engine.DeleteProductRequest)
+	if err := decodeReq(r, req); err != nil {
+		return err
+	}
+
+	id := urlParamMustInt("id", r)
+	req.ID = uint(id)
+	if err := c.DeleteProduct(req); err != nil {
 		return err
 	}
 

@@ -11,13 +11,13 @@ type (
 
 	// User model
 	User struct {
-		Model
-		FirstName string `json:"firstName" fako:"first_name"`
-		LastName  string `json:"lastName" fako:"last_name"`
-		Email     string `json:"email" fako:"email_address" storm:"unique"`
-		Password  string `json:"password" fako:"simple_password"`
-		IsActive  *bool  `json:"isActive"`
-		IsAdmin   *bool  `json:"isAdmin"`
+		Model     `db:",inline"`
+		FirstName string `json:"firstName" db:"first_name"`
+		LastName  string `json:"lastName" db:"last_name"`
+		Email     string `json:"email" db:"email"`
+		Password  string `json:"password" db:"password"`
+		IsActive  *bool  `json:"isActive" db:"is_active"`
+		IsAdmin   *bool  `json:"isAdmin" db:"is_admin"`
 	}
 )
 

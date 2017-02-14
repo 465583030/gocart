@@ -4,8 +4,9 @@ import "fmt"
 import "sync"
 
 type (
+	// Mailer app mailer interface
 	Mailer interface {
-		SendWelcomeMail(to string) error
+		SendWelcomeMail(to string, activationURL string) error
 		SendPasswordResetLink(to string, resetLink string) error
 	}
 
@@ -27,9 +28,9 @@ func (f *factory) NewMail() Mailer {
 	return mailInstance
 }
 
-func (m *mail) SendWelcomeMail(to string) error {
+func (m *mail) SendWelcomeMail(to string, activationURL string) error {
 	subject := "Welcome"
-	body := fmt.Sprintf("Welcome!")
+	body := fmt.Sprintf("Welcome! Please click here to activate your account. %s", activationURL)
 
 	return m.ms.Send([]string{to}, subject, []byte(body))
 }

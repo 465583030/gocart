@@ -1,5 +1,7 @@
 # Go sample e-commerce web application
 
+**!!!under development!!!**
+
 **This project is just an real world example to understand and tell these in GO;**
 
 - How to organize folders

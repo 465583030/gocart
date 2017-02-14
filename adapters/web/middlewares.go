@@ -11,7 +11,7 @@ import (
 
 type (
 	userFinder interface {
-		GetFromJWT(tokenStr string) (*domain.User, error)
+		GetFromAuthToken(tokenStr string) (*domain.User, error)
 	}
 )
 
@@ -43,7 +43,7 @@ func newSetUserMid(uf userFinder) func(http.Handler) http.Handler {
 				return nil
 			}
 
-			u, err := uf.GetFromJWT(tokenStr)
+			u, err := uf.GetFromAuthToken(tokenStr)
 			if err != nil {
 				// handle token err
 				tokenErr, ok := err.(*engine.TokenErr)
@@ -74,6 +74,25 @@ func newAuthRequiredMid(next http.Handler) http.Handler {
 
 		if !*usr.IsActive {
 			return newWebErr(inactiveUserErrCode, http.StatusUnauthorized, nil)
+		}
+
+		next.ServeHTTP(w, r)
+		return nil
+	})
+}
+
+func newAdminOnlyMid(next http.Handler) http.Handler {
+	return errHandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		usr, ok := domain.UserFromContext(r.Context())
+		if !ok {
+			return errors.New("user can't get from request's context")
+		}
+		if !*usr.IsActive {
+			return errors.New("inactive user")
+		}
+
+		if *usr.IsAdmin != true {
+			return newWebErr(unknownErrCode, http.StatusUnauthorized, errors.New("permission denied"))
 		}
 
 		next.ServeHTTP(w, r)

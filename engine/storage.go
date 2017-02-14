@@ -5,26 +5,26 @@ import (
 )
 
 type (
-	notFoundErrChecker interface {
-		IsNotFoundErr(error) bool
-	}
+	Sorting uint
 
 	UserRepository interface {
 		Add(*domain.User) error
-		OneBy([]*Filter) (*domain.User, error)
-		ExistsBy([]*Filter) (bool, error)
+		One(uint) (*domain.User, error)
+		OneByEmail(string) (*domain.User, error)
+		ExistsByEmail(string) (bool, error)
 		Update(*domain.User) error
 	}
 
 	CatalogRepository interface {
-		notFoundErrChecker
 		AddProduct(*domain.Product) error
-		OneProductBy([]*Filter) (*domain.Product, error)
-		FindProducts(*Query) ([]*domain.Product, error)
-		FindProductsInCategories([]uint, *Query) ([]*domain.Product, error)
+		OneProduct(id uint) (*domain.Product, error)
+		OneActiveProduct(id uint) (*domain.Product, error)
+		FindActiveProducts(s Sorting, offset int, limit int) ([]*domain.Product, error)
+		FindActiveProductsInCategories(ids []uint, s Sorting, offset int, limit int) ([]*domain.Product, error)
+		FindProductsInCategories(ids []uint, s Sorting, offset int, limit int) ([]*domain.Product, error)
 		UpdateProduct(*domain.Product) error
-		DeleteProductBy([]*Filter) error
-		FindCategories(*Query) ([]*domain.Category, error)
+		DeleteProductWithAssoc(id uint) error
+		FindCategoriesByIDs(ids []uint) ([]*domain.Category, error)
 	}
 
 	ImageRepository interface {
@@ -36,4 +36,8 @@ type (
 		NewCatalogRepository() CatalogRepository
 		NewImageRepository() ImageRepository
 	}
+)
+
+const (
+	SortByIDDesc Sorting = iota
 )
